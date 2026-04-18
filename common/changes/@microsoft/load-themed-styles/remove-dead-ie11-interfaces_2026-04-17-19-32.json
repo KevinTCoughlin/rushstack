@@ -1,0 +1,10 @@
+{
+  "changes": [
+    {
+      "packageName": "@microsoft/load-themed-styles",
+      "comment": "Remove unused legacy IE-only type definitions (`IStyleSheet`, `IExtendedHtmlStyleElement`) and the unreferenced `lastStyleElement` field from the internal `IThemeState` interface.",
+      "type": "patch"
+    }
+  ],
+  "packageName": "@microsoft/load-themed-styles"
+}

@@ -23,14 +23,6 @@ export interface ITheme {
   [key: string]: string;
 }
 
-interface IStyleSheet {
-  cssText: string;
-}
-
-interface IExtendedHtmlStyleElement extends HTMLStyleElement {
-  styleSheet: IStyleSheet;
-}
-
 /**
  * Performance Measurement of loading styles
  */
@@ -53,7 +45,6 @@ interface IRunState {
 
 interface IThemeState {
   theme: ITheme | undefined;
-  lastStyleElement: IExtendedHtmlStyleElement;
   registeredStyles: IStyleRecord[]; // records of already registered non-themable styles
   registeredThemableStyles: IStyleRecord[]; // records of already registered themable styles
   loadStyles: ((processedStyles: string, rawStyles?: string | ThemableArray) => void) | undefined;
@@ -134,7 +125,6 @@ function measure(func: () => void): void {
 function initializeThemeState(): IThemeState {
   let state: IThemeState = _root.__themeState__ || {
     theme: undefined,
-    lastStyleElement: undefined,
     registeredStyles: []
   };
 
