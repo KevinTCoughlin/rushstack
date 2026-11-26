@@ -108,6 +108,41 @@ describe(splitStyles.name, () => {
 });
 
 describe(loadStyles.name, () => {
+  interface IWindowWithCSPSettings {
+    CSPSettings?: { nonce?: string };
+  }
+
+  function getStyleElements(): HTMLStyleElement[] {
+    return Array.from(document.querySelectorAll<HTMLStyleElement>('style[data-load-themed-styles]'));
+  }
+
+  afterEach(() => {
+    clearStyles();
+    delete (window as IWindowWithCSPSettings).CSPSettings;
+  });
+
+  it('does not set a nonce when CSPSettings is not defined', () => {
+    loadStyles('.foo { color: red }');
+
+    const styleElements: HTMLStyleElement[] = getStyleElements();
+    expect(styleElements).toHaveLength(1);
+    expect(styleElements[0].hasAttribute('nonce')).toEqual(false);
+  });
+
+  it('reads the CSP nonce when the style element is inserted', () => {
+    // CSPSettings is defined after the module has been loaded
+    (window as IWindowWithCSPSettings).CSPSettings = { nonce: 'first-nonce' };
+    loadStyles('.foo { color: red }');
+
+    (window as IWindowWithCSPSettings).CSPSettings = { nonce: 'second-nonce' };
+    loadStyles('.bar { color: blue }');
+
+    const styleElements: HTMLStyleElement[] = getStyleElements();
+    expect(styleElements).toHaveLength(2);
+    expect(styleElements[0].getAttribute('nonce')).toEqual('first-nonce');
+    expect(styleElements[1].getAttribute('nonce')).toEqual('second-nonce');
+  });
+
   it('passes the styles to loadStyles override callback', () => {
     const expected: string = 'xxx.foo { color: #FFF }xxx';
     let subject: string | undefined = undefined;
