@@ -152,6 +152,28 @@ describe(loadTheme.name, () => {
     expect(detokenize('"[theme:color, default: #FFF]"')).toEqual('#FFF');
   });
 
+  it('accepts a theme without a prototype', () => {
+    const theme: Record<string, string> = Object.create(null);
+    theme.color = 'red';
+
+    expect(() => loadTheme(theme)).not.toThrow();
+    expect(document.body.style.getPropertyValue('--color')).toEqual('red');
+  });
+
+  it('accepts a theme slot named "hasOwnProperty"', () => {
+    expect(() => loadTheme({ hasOwnProperty: 'red' })).not.toThrow();
+    expect(document.body.style.getPropertyValue('--hasOwnProperty')).toEqual('red');
+  });
+
+  it('ignores inherited theme slots when setting CSS variables', () => {
+    const theme: Record<string, string> = Object.create({ inherited: 'blue' });
+    theme.color = 'red';
+
+    loadTheme(theme);
+    expect(document.body.style.getPropertyValue('--color')).toEqual('red');
+    expect(document.body.style.getPropertyValue('--inherited')).toEqual('');
+  });
+
   it('does not throw when document.body is null', () => {
     jest.spyOn(document, 'body', 'get').mockReturnValue(null as unknown as HTMLElement);
 

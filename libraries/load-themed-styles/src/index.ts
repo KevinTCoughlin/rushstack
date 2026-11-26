@@ -253,12 +253,12 @@ export function loadTheme(theme: ITheme | undefined): void {
   // "document" does not exist during server side rendering, and "document.body" is null until the
   // <body> tag has been parsed (for example, when called from a script in <head>).
   const body: HTMLElement | null = typeof document !== 'undefined' ? document.body : null;
-  if (body) {
+  if (body && theme) {
     const { style } = body;
-    for (const key in theme) {
-      if (theme.hasOwnProperty(key)) {
-        style.setProperty(`--${key}`, theme[key]);
-      }
+    // Object.keys() rather than theme.hasOwnProperty(), which is missing from prototype-less objects
+    // and can be shadowed by a theme slot of the same name.
+    for (const key of Object.keys(theme)) {
+      style.setProperty(`--${key}`, theme[key]);
     }
   }
 

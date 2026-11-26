@@ -1,0 +1,11 @@
+{
+  "changes": [
+    {
+      "packageName": "@microsoft/load-themed-styles",
+      "comment": "Fix `loadTheme` throwing when the theme object has no prototype or has a slot named `hasOwnProperty`.",
+      "type": "patch"
+    }
+  ],
+  "packageName": "@microsoft/load-themed-styles",
+  "email": "706967+KevinTCoughlin@users.noreply.github.com"
+}
