@@ -49,6 +49,8 @@ const OPERATION_B: string = 'project-b (_phase:test)';
 const OPERATION_C: string = 'project-c (_phase:test)';
 const DAEMON_VERSION: string = 'wire-test';
 const RUSH_VERSION: string = '5.178.1';
+// The tracker's default idle limit, which the daemon host uses.
+const CONNECTING_IDLE_LIMIT_MS: number = 100;
 const testRepoRoots: Set<string> = new Set();
 
 afterEach(() => {
@@ -341,6 +343,9 @@ describe('daemon phased request wire integration', () => {
   });
 
   it('counts a connection as connecting again once the daemon finishes writing a reply that waited', async () => {
+    // The tracker compares activity times with its idle limit. On a loaded machine, reading a large pong takes
+    // longer than that limit, so this test stops the clock and moves it itself. Sockets do not use these timers.
+    jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] });
     const addSpy: jest.SpyInstance = jest.spyOn(ConnectingClientTracker.prototype, 'add');
     const repoRoot: string = createRepoRoot();
     const fixture: ITestRoutingFixture = createRoutingFixture(
@@ -371,15 +376,20 @@ describe('daemon phased request wire integration', () => {
       await client.sendControlAsync({ kind: 'ping', payload: {} });
       // The daemon read the ping but cannot finish writing the pong. A client that stops reading must not hold
       // batches, so its connection still counts as idle once the frame it sent last is old enough.
-      await sleepAsync(150);
+      await settleAsync();
+      jest.advanceTimersByTime(CONNECTING_IDLE_LIMIT_MS + 50);
       expect(await isWaitingAsync(tracker)).toBe(false);
 
       // As when the daemon was too busy to finish writing the pong, the client gets the pong only now, and has not
-      // sent its request yet.
+      // sent its request yet. The daemon can record the finished write a few turns after the client reads the pong.
       client.resumeReading();
       expect((await client.readControlAsync()).kind).toBe('pong');
+      await settleAsync();
       expect(await isWaitingAsync(tracker)).toBe(true);
+      jest.advanceTimersByTime(CONNECTING_IDLE_LIMIT_MS);
+      expect(await isWaitingAsync(tracker)).toBe(false);
     } finally {
+      jest.useRealTimers();
       addSpy.mockRestore();
       await Promise.all(clients.map((client: DaemonRequestWireClient) => client.closeAsync()));
       await host.closeAsync();
