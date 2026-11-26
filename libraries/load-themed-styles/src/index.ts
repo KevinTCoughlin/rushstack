@@ -415,7 +415,7 @@ export function splitStyles(styles: string): ThemableArray {
       const matchIndex: number = tokenMatch.index;
       if (matchIndex > pos) {
         result.push({
-          rawString: styles.substring(pos, matchIndex)
+          rawString: styles.slice(pos, matchIndex)
         });
       }
 
@@ -430,7 +430,7 @@ export function splitStyles(styles: string): ThemableArray {
 
     // Push the rest of the string after the last match.
     result.push({
-      rawString: styles.substring(pos)
+      rawString: styles.slice(pos)
     });
   }
 
