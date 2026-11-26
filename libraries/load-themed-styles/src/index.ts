@@ -4,7 +4,7 @@
 // Declaring a global here in case that the execution environment is Node.js (without importing the
 // entire node.js d.ts for now)
 /// <reference lib="dom" />
-declare let global: any; // eslint-disable-line @typescript-eslint/no-explicit-any
+declare const global: IRootObject;
 declare const DEBUG: boolean | undefined;
 
 /**
@@ -61,6 +61,21 @@ interface IThemeState {
   runState: IRunState;
 }
 
+/**
+ * Content Security Policy settings that the host page may define on the global object.
+ */
+interface ICSPSettings {
+  nonce?: string;
+}
+
+/**
+ * The properties that this library reads from and writes to the global object.
+ */
+interface IRootObject {
+  CSPSettings?: ICSPSettings;
+  __themeState__?: IThemeState;
+}
+
 interface IStyleRecord {
   styleElement: Element;
   themableStyle: ThemableArray;
@@ -105,7 +120,7 @@ export const enum ClearStyleOptions {
 
 // Store the theming state in __themeState__ global scope for reuse in the case of duplicate
 // load-themed-styles hosted on the page.
-const _root: any = typeof window === 'undefined' ? global : window; // eslint-disable-line @typescript-eslint/no-explicit-any
+const _root: IRootObject = typeof window === 'undefined' ? global : (window as IRootObject);
 
 const _themeState: IThemeState = initializeThemeState();
 
@@ -138,7 +153,8 @@ function getStyleNonce(): string | undefined {
  * initialize global state object
  */
 function initializeThemeState(): IThemeState {
-  let state: IThemeState = _root.__themeState__ || {
+  // The existing state may come from an older copy of this library that did not define every property.
+  let state: Partial<IThemeState> = _root.__themeState__ || {
     theme: undefined,
     lastStyleElement: undefined,
     registeredStyles: []
@@ -164,8 +180,9 @@ function initializeThemeState(): IThemeState {
       registeredThemableStyles: []
     };
   }
-  _root.__themeState__ = state;
-  return state;
+  const themeState: IThemeState = state as IThemeState;
+  _root.__themeState__ = themeState;
+  return themeState;
 }
 
 /**
