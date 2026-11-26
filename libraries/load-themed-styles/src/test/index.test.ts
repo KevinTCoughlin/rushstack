@@ -7,6 +7,7 @@ import {
   splitStyles,
   loadStyles,
   configureLoadStyles,
+  clearStyles,
   replaceTokensWithVariables,
   type IThemingInstruction
 } from '../index';
@@ -121,5 +122,41 @@ describe(loadStyles.name, () => {
     expect(subject).toEqual(expected);
 
     configureLoadStyles(undefined);
+  });
+});
+
+describe(loadTheme.name, () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+    loadTheme(undefined);
+    clearStyles();
+    document.body.removeAttribute('style');
+  });
+
+  it('sets CSS variables on document.body', () => {
+    loadTheme({ color: 'red', background: 'blue' });
+
+    expect(document.body.style.getPropertyValue('--color')).toEqual('red');
+    expect(document.body.style.getPropertyValue('--background')).toEqual('blue');
+  });
+
+  it('accepts an undefined theme', () => {
+    expect(() => loadTheme(undefined)).not.toThrow();
+    expect(document.body.getAttribute('style')).toBeNull();
+    expect(detokenize('"[theme:color, default: #FFF]"')).toEqual('#FFF');
+  });
+
+  it('accepts an empty theme', () => {
+    expect(() => loadTheme({})).not.toThrow();
+    expect(document.body.getAttribute('style')).toBeNull();
+    expect(detokenize('"[theme:color, default: #FFF]"')).toEqual('#FFF');
+  });
+
+  it('does not throw when document.body is null', () => {
+    jest.spyOn(document, 'body', 'get').mockReturnValue(null as unknown as HTMLElement);
+
+    expect(() => loadTheme({ color: 'red' })).not.toThrow();
+    // The theme is still recorded and used to resolve tokens
+    expect(detokenize('"[theme:color, default: #FFF]"')).toEqual('red');
   });
 });

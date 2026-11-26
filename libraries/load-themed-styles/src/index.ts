@@ -250,10 +250,15 @@ function applyThemableStyles(stylesArray: ThemableArray, styleRecord?: IStyleRec
 export function loadTheme(theme: ITheme | undefined): void {
   _themeState.theme = theme;
 
-  const { style } = document.body;
-  for (const key in theme) {
-    if (theme.hasOwnProperty(key)) {
-      style.setProperty(`--${key}`, theme[key]);
+  // "document" does not exist during server side rendering, and "document.body" is null until the
+  // <body> tag has been parsed (for example, when called from a script in <head>).
+  const body: HTMLElement | null = typeof document !== 'undefined' ? document.body : null;
+  if (body) {
+    const { style } = body;
+    for (const key in theme) {
+      if (theme.hasOwnProperty(key)) {
+        style.setProperty(`--${key}`, theme[key]);
+      }
     }
   }
 
