@@ -22,6 +22,7 @@ import type {
 import type { ITerminal } from '@rushstack/terminal';
 
 import { ConnectingClientTracker } from '../ConnectingClientTracker';
+import type { IConnectingClient } from '../ConnectingClientTracker';
 import type { IDaemonRequestResolver } from '../DaemonRequestDispatcher';
 import { RushDaemonHost } from '../RushDaemonHost';
 import type { IRushDaemonHostOptions } from '../RushDaemonHost';
@@ -367,18 +368,26 @@ describe('daemon phased request wire integration', () => {
       await client.sendControlAsync(createDaemonHello(DAEMON_PROTOCOL_VERSION));
       expect((await client.readControlAsync()).kind).toBe('helloAck');
       await settleAsync();
+      const touchSpy: jest.SpyInstance = jest.spyOn(
+        addSpy.mock.results[1].value as IConnectingClient,
+        'touch'
+      );
       client.pauseReading();
       await client.sendControlAsync({ kind: 'ping', payload: {} });
       // The daemon read the ping but cannot finish writing the pong. A client that stops reading must not hold
       // batches, so its connection still counts as idle once the frame it sent last is old enough.
       await sleepAsync(150);
       expect(await isWaitingAsync(tracker)).toBe(false);
+      const touchesBeforeResume: number = touchSpy.mock.calls.length;
 
       // As when the daemon was too busy to finish writing the pong, the client gets the pong only now, and has not
-      // sent its request yet.
+      // sent its request yet. The daemon records the finished write as activity, which is what makes the connection
+      // count as connecting again. This checks that record rather than racing the tracker's idle limit against the
+      // clock: on a loaded machine, reading and decoding the pong can take longer than the limit. The tracker's own
+      // tests cover how long a connection counts as connecting after its latest activity.
       client.resumeReading();
       expect((await client.readControlAsync()).kind).toBe('pong');
-      expect(await isWaitingAsync(tracker)).toBe(true);
+      expect(touchSpy.mock.calls.length).toBeGreaterThan(touchesBeforeResume);
     } finally {
       addSpy.mockRestore();
       await Promise.all(clients.map((client: DaemonRequestWireClient) => client.closeAsync()));
