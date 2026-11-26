@@ -427,7 +427,7 @@ function registerStyles(styleArray: ThemableArray): void {
   if (typeof document === 'undefined') {
     return;
   }
-  const head: HTMLHeadElement = document.getElementsByTagName('head')[0];
+  const head: HTMLHeadElement = document.head;
   const styleElement: HTMLStyleElement = document.createElement('style');
   const { styleString, themable } = resolveThemableArray(styleArray);
 
