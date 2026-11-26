@@ -105,6 +105,45 @@ describe(splitStyles.name, () => {
       }
     }
   });
+
+  it('returns the same result when called repeatedly with the same input', () => {
+    const cssString: string = '.a { color: "[theme:first, default: #AAA]"; background: "[theme:second]"; }';
+    const first: IThemingInstruction[] = splitStyles(cssString);
+    const second: IThemingInstruction[] = splitStyles(cssString);
+
+    expect(first).toHaveLength(5);
+    expect(second).toEqual(first);
+  });
+
+  it('starts from the beginning of the string after a previous call was interrupted', () => {
+    const cssString: string = '"[theme:first, default: #AAA]" "[theme:second, default: #BBB]"';
+
+    // Make the first result.push() inside splitStyles() throw, which leaves the shared regex mid-string.
+    // Patching the prototype by hand is deliberate: a Jest spy records its calls with Array.prototype.push.
+    /* eslint-disable no-extend-native */
+    const originalPush: typeof Array.prototype.push = Array.prototype.push;
+    let thrown: Error | undefined;
+    Array.prototype.push = function (): number {
+      Array.prototype.push = originalPush;
+      throw new Error('push failed');
+    };
+    try {
+      splitStyles(cssString);
+    } catch (e) {
+      thrown = e as Error;
+    } finally {
+      Array.prototype.push = originalPush;
+    }
+    /* eslint-enable no-extend-native */
+    expect(thrown?.message).toEqual('push failed');
+
+    expect(splitStyles(cssString)).toEqual([
+      { theme: 'first', defaultValue: '#AAA' },
+      { rawString: ' ' },
+      { theme: 'second', defaultValue: '#BBB' },
+      { rawString: '' }
+    ]);
+  });
 });
 
 describe(loadStyles.name, () => {

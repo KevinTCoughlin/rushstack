@@ -406,6 +406,9 @@ function resolveThemableArray(splitStyleArray: ThemableArray): IThemableArrayRes
 export function splitStyles(styles: string): ThemableArray {
   const result: ThemableArray = [];
   if (styles) {
+    // The regex is shared and stateful (global flag). If a previous exec() loop was interrupted by an
+    // exception, lastIndex is left pointing into that earlier string, so always start from the beginning.
+    _themeTokenRegex.lastIndex = 0;
     let pos: number = 0; // Current position in styles.
     let tokenMatch: RegExpExecArray | null;
     while ((tokenMatch = _themeTokenRegex.exec(styles))) {
