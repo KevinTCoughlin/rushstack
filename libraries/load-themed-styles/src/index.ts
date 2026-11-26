@@ -107,9 +107,6 @@ export const enum ClearStyleOptions {
 // load-themed-styles hosted on the page.
 const _root: any = typeof window === 'undefined' ? global : window; // eslint-disable-line @typescript-eslint/no-explicit-any
 
-// Nonce string to inject into script tag if one provided. This is used in CSP (Content Security Policy).
-const _styleNonce: string = _root && _root.CSPSettings && _root.CSPSettings.nonce;
-
 const _themeState: IThemeState = initializeThemeState();
 
 /**
@@ -126,6 +123,15 @@ function measure(func: () => void): void {
   func();
   const end: number = now();
   _themeState.perf.duration += end - start;
+}
+
+/**
+ * Nonce string to inject into the style tag if one is provided. This is used in CSP (Content Security Policy).
+ * It is read each time a style element is created, because the host page may define or change
+ * `CSPSettings.nonce` after this module has been loaded.
+ */
+function getStyleNonce(): string | undefined {
+  return _root && _root.CSPSettings && _root.CSPSettings.nonce;
 }
 
 /**
@@ -426,8 +432,9 @@ function registerStyles(styleArray: ThemableArray): void {
   const { styleString, themable } = resolveThemableArray(styleArray);
 
   styleElement.setAttribute('data-load-themed-styles', 'true');
-  if (_styleNonce) {
-    styleElement.setAttribute('nonce', _styleNonce);
+  const styleNonce: string | undefined = getStyleNonce();
+  if (styleNonce) {
+    styleElement.setAttribute('nonce', styleNonce);
   }
   styleElement.appendChild(document.createTextNode(styleString));
   _themeState.perf.count++;
