@@ -40,7 +40,9 @@ interface IMeasurement {
    */
   count: number;
   /**
-   * Total duration of all loadStyles exections
+   * Formerly the total duration of all loadStyles executions. This copy of the library no longer
+   * measures it, but the field must stay in the shared `__themeState__` object: an older copy of
+   * load-themed-styles on the same page reuses that object and adds to `perf.duration`.
    */
   duration: number;
 }
@@ -130,16 +132,6 @@ const _themeState: IThemeState = initializeThemeState();
 const _themeTokenRegex: RegExp =
   /[\'\"]\[theme:\s*(\w+)\s*(?:\,\s*default:\s*([\\"\']?[\.\,\(\)\#\-\s\w]*[\.\,\(\)\#\-\w][\"\']?))?\s*\][\'\"]/g;
 
-const now: () => number = () =>
-  typeof performance !== 'undefined' && !!performance.now ? performance.now() : Date.now();
-
-function measure(func: () => void): void {
-  const start: number = now();
-  func();
-  const end: number = now();
-  _themeState.perf.duration += end - start;
-}
-
 /**
  * Nonce string to inject into the style tag if one is provided. This is used in CSP (Content Security Policy).
  * It is read each time a style element is created, because the host page may define or change
@@ -192,18 +184,16 @@ function initializeThemeState(): IThemeState {
  * @param {boolean} loadAsync When true, always load styles in async mode, irrespective of current sync mode.
  */
 export function loadStyles(styles: string | ThemableArray, loadAsync: boolean = false): void {
-  measure(() => {
-    const styleParts: ThemableArray = Array.isArray(styles) ? styles : splitStyles(styles);
-    const { mode, buffer, flushTimer } = _themeState.runState;
-    if (loadAsync || mode === Mode.async) {
-      buffer.push(styleParts);
-      if (!flushTimer) {
-        _themeState.runState.flushTimer = asyncLoadStyles();
-      }
-    } else {
-      applyThemableStyles(styleParts);
+  const styleParts: ThemableArray = Array.isArray(styles) ? styles : splitStyles(styles);
+  const { mode, buffer, flushTimer } = _themeState.runState;
+  if (loadAsync || mode === Mode.async) {
+    buffer.push(styleParts);
+    if (!flushTimer) {
+      _themeState.runState.flushTimer = asyncLoadStyles();
     }
-  });
+  } else {
+    applyThemableStyles(styleParts);
+  }
 }
 
 /**
@@ -229,14 +219,12 @@ export function configureRunMode(mode: Mode): void {
  * external code can call flush to synchronously force processing of currently buffered styles
  */
 export function flush(): void {
-  measure(() => {
-    const styleArrays: ThemableArray[] = _themeState.runState.buffer.slice();
-    _themeState.runState.buffer = [];
-    const mergedStyleArray: ThemableArray = ([] as ThemableArray).concat.apply([], styleArrays);
-    if (mergedStyleArray.length > 0) {
-      applyThemableStyles(mergedStyleArray);
-    }
-  });
+  const styleArrays: ThemableArray[] = _themeState.runState.buffer.slice();
+  _themeState.runState.buffer = [];
+  const mergedStyleArray: ThemableArray = ([] as ThemableArray).concat.apply([], styleArrays);
+  if (mergedStyleArray.length > 0) {
+    applyThemableStyles(mergedStyleArray);
+  }
 }
 
 /**
