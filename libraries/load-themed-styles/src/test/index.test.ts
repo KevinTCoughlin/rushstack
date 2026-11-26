@@ -129,6 +129,15 @@ describe(loadStyles.name, () => {
     expect(styleElements[0].hasAttribute('nonce')).toEqual(false);
   });
 
+  it('appends the style element to document.head', () => {
+    loadStyles('.foo { color: red }');
+
+    const styleElements: HTMLStyleElement[] = getStyleElements();
+    expect(styleElements).toHaveLength(1);
+    expect(styleElements[0].parentElement).toBe(document.head);
+    expect(styleElements[0].textContent).toEqual('.foo { color: red }');
+  });
+
   it('reads the CSP nonce when the style element is inserted', () => {
     // CSPSettings is defined after the module has been loaded
     (window as IWindowWithCSPSettings).CSPSettings = { nonce: 'first-nonce' };
