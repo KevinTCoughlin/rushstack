@@ -4,7 +4,7 @@
 // Declaring a global here in case that the execution environment is Node.js (without importing the
 // entire node.js d.ts for now)
 /// <reference lib="dom" />
-declare let global: any; // eslint-disable-line @typescript-eslint/no-explicit-any
+declare const global: IRootObject;
 declare const DEBUG: boolean | undefined;
 
 /**
@@ -40,7 +40,9 @@ interface IMeasurement {
    */
   count: number;
   /**
-   * Total duration of all loadStyles exections
+   * Formerly the total duration of all loadStyles executions. This copy of the library no longer
+   * measures it, but the field must stay in the shared `__themeState__` object: an older copy of
+   * load-themed-styles on the same page reuses that object and adds to `perf.duration`.
    */
   duration: number;
 }
@@ -59,6 +61,21 @@ interface IThemeState {
   loadStyles: ((processedStyles: string, rawStyles?: string | ThemableArray) => void) | undefined;
   perf: IMeasurement;
   runState: IRunState;
+}
+
+/**
+ * Content Security Policy settings that the host page may define on the global object.
+ */
+interface ICSPSettings {
+  nonce?: string;
+}
+
+/**
+ * The properties that this library reads from and writes to the global object.
+ */
+interface IRootObject {
+  CSPSettings?: ICSPSettings;
+  __themeState__?: IThemeState;
 }
 
 interface IStyleRecord {
@@ -105,10 +122,7 @@ export const enum ClearStyleOptions {
 
 // Store the theming state in __themeState__ global scope for reuse in the case of duplicate
 // load-themed-styles hosted on the page.
-const _root: any = typeof window === 'undefined' ? global : window; // eslint-disable-line @typescript-eslint/no-explicit-any
-
-// Nonce string to inject into script tag if one provided. This is used in CSP (Content Security Policy).
-const _styleNonce: string = _root && _root.CSPSettings && _root.CSPSettings.nonce;
+const _root: IRootObject = typeof window === 'undefined' ? global : (window as IRootObject);
 
 const _themeState: IThemeState = initializeThemeState();
 
@@ -118,21 +132,21 @@ const _themeState: IThemeState = initializeThemeState();
 const _themeTokenRegex: RegExp =
   /[\'\"]\[theme:\s*(\w+)\s*(?:\,\s*default:\s*([\\"\']?[\.\,\(\)\#\-\s\w]*[\.\,\(\)\#\-\w][\"\']?))?\s*\][\'\"]/g;
 
-const now: () => number = () =>
-  typeof performance !== 'undefined' && !!performance.now ? performance.now() : Date.now();
-
-function measure(func: () => void): void {
-  const start: number = now();
-  func();
-  const end: number = now();
-  _themeState.perf.duration += end - start;
+/**
+ * Nonce string to inject into the style tag if one is provided. This is used in CSP (Content Security Policy).
+ * It is read each time a style element is created, because the host page may define or change
+ * `CSPSettings.nonce` after this module has been loaded.
+ */
+function getStyleNonce(): string | undefined {
+  return _root && _root.CSPSettings && _root.CSPSettings.nonce;
 }
 
 /**
  * initialize global state object
  */
 function initializeThemeState(): IThemeState {
-  let state: IThemeState = _root.__themeState__ || {
+  // The existing state may come from an older copy of this library that did not define every property.
+  let state: Partial<IThemeState> = _root.__themeState__ || {
     theme: undefined,
     lastStyleElement: undefined,
     registeredStyles: []
@@ -158,8 +172,9 @@ function initializeThemeState(): IThemeState {
       registeredThemableStyles: []
     };
   }
-  _root.__themeState__ = state;
-  return state;
+  const themeState: IThemeState = state as IThemeState;
+  _root.__themeState__ = themeState;
+  return themeState;
 }
 
 /**
@@ -169,18 +184,16 @@ function initializeThemeState(): IThemeState {
  * @param {boolean} loadAsync When true, always load styles in async mode, irrespective of current sync mode.
  */
 export function loadStyles(styles: string | ThemableArray, loadAsync: boolean = false): void {
-  measure(() => {
-    const styleParts: ThemableArray = Array.isArray(styles) ? styles : splitStyles(styles);
-    const { mode, buffer, flushTimer } = _themeState.runState;
-    if (loadAsync || mode === Mode.async) {
-      buffer.push(styleParts);
-      if (!flushTimer) {
-        _themeState.runState.flushTimer = asyncLoadStyles();
-      }
-    } else {
-      applyThemableStyles(styleParts);
+  const styleParts: ThemableArray = Array.isArray(styles) ? styles : splitStyles(styles);
+  const { mode, buffer, flushTimer } = _themeState.runState;
+  if (loadAsync || mode === Mode.async) {
+    buffer.push(styleParts);
+    if (!flushTimer) {
+      _themeState.runState.flushTimer = asyncLoadStyles();
     }
-  });
+  } else {
+    applyThemableStyles(styleParts);
+  }
 }
 
 /**
@@ -206,14 +219,12 @@ export function configureRunMode(mode: Mode): void {
  * external code can call flush to synchronously force processing of currently buffered styles
  */
 export function flush(): void {
-  measure(() => {
-    const styleArrays: ThemableArray[] = _themeState.runState.buffer.slice();
-    _themeState.runState.buffer = [];
-    const mergedStyleArray: ThemableArray = ([] as ThemableArray).concat.apply([], styleArrays);
-    if (mergedStyleArray.length > 0) {
-      applyThemableStyles(mergedStyleArray);
-    }
-  });
+  const styleArrays: ThemableArray[] = _themeState.runState.buffer.slice();
+  _themeState.runState.buffer = [];
+  const mergedStyleArray: ThemableArray = ([] as ThemableArray).concat.apply([], styleArrays);
+  if (mergedStyleArray.length > 0) {
+    applyThemableStyles(mergedStyleArray);
+  }
 }
 
 /**
@@ -250,9 +261,14 @@ function applyThemableStyles(stylesArray: ThemableArray, styleRecord?: IStyleRec
 export function loadTheme(theme: ITheme | undefined): void {
   _themeState.theme = theme;
 
-  const { style } = document.body;
-  for (const key in theme) {
-    if (theme.hasOwnProperty(key)) {
+  // "document" does not exist during server side rendering, and "document.body" is null until the
+  // <body> tag has been parsed (for example, when called from a script in <head>).
+  const body: HTMLElement | null = typeof document !== 'undefined' ? document.body : null;
+  if (body && theme) {
+    const { style } = body;
+    // Object.keys() rather than theme.hasOwnProperty(), which is missing from prototype-less objects
+    // and can be shadowed by a theme slot of the same name.
+    for (const key of Object.keys(theme)) {
       style.setProperty(`--${key}`, theme[key]);
     }
   }
@@ -378,13 +394,16 @@ function resolveThemableArray(splitStyleArray: ThemableArray): IThemableArrayRes
 export function splitStyles(styles: string): ThemableArray {
   const result: ThemableArray = [];
   if (styles) {
+    // The regex is shared and stateful (global flag). If a previous exec() loop was interrupted by an
+    // exception, lastIndex is left pointing into that earlier string, so always start from the beginning.
+    _themeTokenRegex.lastIndex = 0;
     let pos: number = 0; // Current position in styles.
     let tokenMatch: RegExpExecArray | null;
     while ((tokenMatch = _themeTokenRegex.exec(styles))) {
       const matchIndex: number = tokenMatch.index;
       if (matchIndex > pos) {
         result.push({
-          rawString: styles.substring(pos, matchIndex)
+          rawString: styles.slice(pos, matchIndex)
         });
       }
 
@@ -399,7 +418,7 @@ export function splitStyles(styles: string): ThemableArray {
 
     // Push the rest of the string after the last match.
     result.push({
-      rawString: styles.substring(pos)
+      rawString: styles.slice(pos)
     });
   }
 
@@ -416,13 +435,14 @@ function registerStyles(styleArray: ThemableArray): void {
   if (typeof document === 'undefined') {
     return;
   }
-  const head: HTMLHeadElement = document.getElementsByTagName('head')[0];
+  const head: HTMLHeadElement = document.head;
   const styleElement: HTMLStyleElement = document.createElement('style');
   const { styleString, themable } = resolveThemableArray(styleArray);
 
   styleElement.setAttribute('data-load-themed-styles', 'true');
-  if (_styleNonce) {
-    styleElement.setAttribute('nonce', _styleNonce);
+  const styleNonce: string | undefined = getStyleNonce();
+  if (styleNonce) {
+    styleElement.setAttribute('nonce', styleNonce);
   }
   styleElement.appendChild(document.createTextNode(styleString));
   _themeState.perf.count++;
