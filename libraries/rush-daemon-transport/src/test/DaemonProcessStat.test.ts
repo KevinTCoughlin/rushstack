@@ -19,7 +19,7 @@ import { waitUntilAsync } from './ProcessWaitFixture';
 const linuxIt: jest.It = process.platform === 'linux' ? it : it.skip;
 // Linux caps pid_max at 2^22, so this pid never exists.
 const IMPOSSIBLE_PID: number = 4194305;
-const SLEEP_SECONDS: string = '30';
+const SLEEP_SCRIPT: string = 'setTimeout(() => undefined, 30000)';
 const DIGITS: RegExp = /^\d+$/;
 // The shell starts a 1 s sleep and then becomes a 30 s sleep, which never reaps it, so the first stays a zombie.
 const ZOMBIE_PARENT_SCRIPT: string = 'sleep 1 & echo $!; exec sleep 30';
@@ -64,8 +64,10 @@ linuxIt('lists every process that has a /proc record, zombies included', async (
 linuxIt('parses a command name that contains spaces and parentheses', async () => {
   const folder: string = fs.mkdtempSync(path.join(os.tmpdir(), 'rushd-stat-'));
   const executable: string = path.join(folder, 'a) b (c');
-  fs.symlinkSync('/bin/sleep', executable);
-  const child: ChildProcess = spawn(executable, [SLEEP_SECONDS], { detached: true, stdio: 'ignore' });
+  // Node runs under any name. A multi-call `sleep`, such as the one in uutils coreutils, refuses a name that is
+  // not its own and exits at once, so the record could already be a zombie's.
+  fs.symlinkSync(process.execPath, executable);
+  const child: ChildProcess = spawn(executable, ['-e', SLEEP_SCRIPT], { detached: true, stdio: 'ignore' });
   await once(child, 'spawn');
   const pid: number = Number(child.pid);
   const stat: IProcessStat | undefined = readProcessStat(pid);
