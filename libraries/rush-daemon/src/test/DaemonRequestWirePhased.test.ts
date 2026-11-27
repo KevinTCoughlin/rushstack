@@ -16,18 +16,23 @@ import {
 } from '@rushstack/rush-daemon-protocol';
 import type {
   DaemonControlMessage,
+  IDaemonFrame,
   IDaemonPhasedRequest,
   IDaemonRequestEnvelope
 } from '@rushstack/rush-daemon-protocol';
+import { DaemonFrameConnection } from '@rushstack/rush-daemon-transport';
 import type { ITerminal } from '@rushstack/terminal';
 
-import { ConnectingClientTracker } from '../ConnectingClientTracker';
+import {
+  ConnectingClientTracker,
+  DEFAULT_CONNECTING_IDLE_LIMIT_MS,
+  setConnectingClientNow
+} from '../ConnectingClientTracker';
 import type { IConnectingClient } from '../ConnectingClientTracker';
 import type { IDaemonRequestResolver } from '../DaemonRequestDispatcher';
 import { RushDaemonHost } from '../RushDaemonHost';
 import type { IRushDaemonHostOptions } from '../RushDaemonHost';
 import { WorkspaceEngineRecreationRequiredError } from '../WorkspaceEngineComponentFactory';
-import type { IWorkspaceWarmSetStatus } from '../WorkspaceWarmSet';
 import {
   TEST_ENGINE_SHAPE,
   TestOperationRunner,
@@ -342,25 +347,22 @@ describe('daemon phased request wire integration', () => {
   });
 
   it('counts a connection as connecting again once the daemon finishes writing a reply that waited', async () => {
+    let nowMs: number = 0;
     const addSpy: jest.SpyInstance = jest.spyOn(ConnectingClientTracker.prototype, 'add');
     const repoRoot: string = createRepoRoot();
     const fixture: ITestRoutingFixture = createRoutingFixture(
       new Map([[OPERATION_A, new TestOperationRunner(OPERATION_A)]])
     );
-    const host: RushDaemonHost = await startHostAsync(repoRoot, fixture);
     const clients: DaemonRequestWireClient[] = [];
+    const releaseWrite: IDeferred<void> = createDeferred<void>();
+    const writeStarted: IDeferred<void> = createDeferred<void>();
+    const sendFrameAsync: (frame: IDaemonFrame) => Promise<void> =
+      DaemonFrameConnection.prototype.sendFrameAsync;
+    let host: RushDaemonHost | undefined;
+    let sendSpy: jest.SpyInstance | undefined;
     try {
-      clients.push(await connectAsync(host));
-      const tracker: ConnectingClientTracker = addSpy.mock.contexts[0] as ConnectingClientTracker;
-      // The first request installs the session, whose warm set status each pong then carries. As in a large repo,
-      // that makes the pong larger than the socket's buffers.
-      const first: ITerminalExchange = await startAsync(
-        clients[0],
-        phasedEnvelope(repoRoot, 'first', OPERATION_A)
-      );
-      expect(first.terminal).toMatchObject({ kind: 'requestResult', payload: { exitCode: 0 } });
-      fixture.session.warmSetStatus = createLargeWarmSetStatus();
-
+      setConnectingClientNow(() => nowMs);
+      host = await startHostAsync(repoRoot, fixture);
       const client: DaemonRequestWireClient = await DaemonRequestWireClient.connectAsync(
         host.paths.socketPath
       );
@@ -368,30 +370,43 @@ describe('daemon phased request wire integration', () => {
       await client.sendControlAsync(createDaemonHello(DAEMON_PROTOCOL_VERSION));
       expect((await client.readControlAsync()).kind).toBe('helloAck');
       await settleAsync();
+      const tracker: ConnectingClientTracker = addSpy.mock.contexts[0] as ConnectingClientTracker;
       const touchSpy: jest.SpyInstance = jest.spyOn(
-        addSpy.mock.results[1].value as IConnectingClient,
+        addSpy.mock.results[0].value as IConnectingClient,
         'touch'
       );
-      client.pauseReading();
+      // Hold the daemon's pong before it reaches the socket. The client uses the same method to send
+      // the ping, so only the pong waits. Pausing the client does not keep a write unfinished on every
+      // platform, and the write's touch can run after the client has already read the frame.
+      sendSpy = jest
+        .spyOn(DaemonFrameConnection.prototype, 'sendFrameAsync')
+        .mockImplementation(async function (this: DaemonFrameConnection, frame: IDaemonFrame): Promise<void> {
+          if (isPongFrame(frame)) {
+            writeStarted.resolve();
+            await releaseWrite.promise;
+          }
+          await sendFrameAsync.call(this, frame);
+        });
       await client.sendControlAsync({ kind: 'ping', payload: {} });
-      // The daemon read the ping but cannot finish writing the pong. A client that stops reading must not hold
-      // batches, so its connection still counts as idle once the frame it sent last is old enough.
-      await sleepAsync(150);
+      await writeStarted.promise;
+      nowMs = DEFAULT_CONNECTING_IDLE_LIMIT_MS;
       expect(await isWaitingAsync(tracker)).toBe(false);
-      const touchesBeforeResume: number = touchSpy.mock.calls.length;
+      const touchesBeforeWrite: number = touchSpy.mock.calls.length;
 
-      // As when the daemon was too busy to finish writing the pong, the client gets the pong only now, and has not
-      // sent its request yet. The daemon records the finished write as activity, which is what makes the connection
-      // count as connecting again. This checks that record rather than racing the tracker's idle limit against the
-      // clock: on a loaded machine, reading and decoding the pong can take longer than the limit. The tracker's own
-      // tests cover how long a connection counts as connecting after its latest activity.
-      client.resumeReading();
+      releaseWrite.resolve();
       expect((await client.readControlAsync()).kind).toBe('pong');
-      expect(touchSpy.mock.calls.length).toBeGreaterThan(touchesBeforeResume);
+      // The session records the finished write in a promise continuation, which can be a later turn than
+      // the client's read. The tracker's own tests cover how long that activity keeps it connecting.
+      await settleAsync();
+      expect(touchSpy.mock.calls.length).toBe(touchesBeforeWrite + 1);
+      expect(await isWaitingAsync(tracker)).toBe(true);
     } finally {
+      releaseWrite.resolve();
+      sendSpy?.mockRestore();
       addSpy.mockRestore();
+      setConnectingClientNow(undefined);
       await Promise.all(clients.map((client: DaemonRequestWireClient) => client.closeAsync()));
-      await host.closeAsync();
+      await host?.closeAsync();
     }
   });
 
@@ -528,6 +543,15 @@ async function readUntilControlKindAsync(
   }
 }
 
+function isPongFrame(frame: IDaemonFrame): boolean {
+  if (frame.kind !== DaemonFrameType.controlJson) return false;
+  try {
+    return decodeDaemonControlMessage(frame.payload).kind === 'pong';
+  } catch {
+    return false;
+  }
+}
+
 async function settleAsync(): Promise<void> {
   for (let turn: number = 0; turn < 20; turn++) {
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -541,31 +565,4 @@ function sleepAsync(durationMs: number): Promise<void> {
 /** Whether a batch would still wait for a connecting client after the daemon handled the frames it received. */
 async function isWaitingAsync(tracker: ConnectingClientTracker): Promise<boolean> {
   return await Promise.race([tracker.waitAsync().then(() => false), settleAsync().then(() => true)]);
-}
-
-/** A warm set status of about 2 MB, like a large repo's, which is larger than any platform's socket buffers. */
-function createLargeWarmSetStatus(): IWorkspaceWarmSetStatus {
-  const projectNames: string[] = Array.from(
-    { length: 20_000 },
-    (unused, index) => `@example/${'large-project-name-'.repeat(5)}${index}`
-  );
-  return {
-    cleanupFailures: [],
-    configuration: {
-      autoWarmByTelemetry: false,
-      warmIdleTimeoutSeconds: 60,
-      warmMemoryBudgetMB: 1024,
-      warmSetMaxProjects: 20_000
-    },
-    daemonResidentMemoryBytes: 0,
-    deferredReason: undefined,
-    maintenanceState: 'running',
-    measuredRunnerMemoryBytes: 0,
-    overMemoryBudget: false,
-    overProjectLimit: false,
-    protectedProjectNames: [],
-    retainedProjectNames: projectNames,
-    unmeasuredRunnerCount: 0,
-    watchedProjectNames: []
-  };
 }

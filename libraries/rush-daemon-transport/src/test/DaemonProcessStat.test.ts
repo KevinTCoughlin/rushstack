@@ -23,6 +23,19 @@ const SLEEP_SECONDS: string = '30';
 const DIGITS: RegExp = /^\d+$/;
 // The shell starts a 1 s sleep and then becomes a 30 s sleep, which never reaps it, so the first stays a zombie.
 const ZOMBIE_PARENT_SCRIPT: string = 'sleep 1 & echo $!; exec sleep 30';
+const PROC_DIRECTORY: string = '/proc';
+const STATUS_FILE_NAME: string = 'status';
+const STATE_PREFIX: string = 'State:\t';
+const ZOMBIE_STATE: string = 'Z';
+const DEAD_STATE: string = 'X';
+
+/** `true` when `/proc/<pid>/status` says the process has exited. That file is not the stat record. */
+function statusReportsExited(pid: number): boolean {
+  const status: string = fs.readFileSync(`${PROC_DIRECTORY}/${pid}/${STATUS_FILE_NAME}`, 'utf8');
+  const stateLine: string = status.split('\n').find((line: string) => line.startsWith(STATE_PREFIX)) ?? '';
+  const state: string = stateLine.charAt(STATE_PREFIX.length);
+  return state === ZOMBIE_STATE || state === DEAD_STATE;
+}
 
 linuxIt('reads the group, session and start time of a live process', () => {
   const self: IProcessStat | undefined = readProcessStat(process.pid);
@@ -66,12 +79,22 @@ linuxIt('parses a command name that contains spaces and parentheses', async () =
   const executable: string = path.join(folder, 'a) b (c');
   fs.symlinkSync('/bin/sleep', executable);
   const child: ChildProcess = spawn(executable, [SLEEP_SECONDS], { detached: true, stdio: 'ignore' });
-  await once(child, 'spawn');
-  const pid: number = Number(child.pid);
-  const stat: IProcessStat | undefined = readProcessStat(pid);
-  child.kill('SIGKILL');
-  await once(child, 'exit');
-  fs.rmSync(folder, { recursive: true, force: true });
-  expect(stat).toMatchObject({ pid, groupId: pid, sessionId: pid, exited: false });
-  expect(stat?.startTime).toMatch(DIGITS);
+  try {
+    await once(child, 'spawn');
+    const pid: number = Number(child.pid);
+    // This process leads its own group, so another test's reaper can already have signaled the pid.
+    // The parsed state has to match /proc/pid/status either way; that file is not the stat record.
+    const stat: IProcessStat | undefined = readProcessStat(pid);
+    expect(stat).toMatchObject({
+      pid,
+      groupId: pid,
+      sessionId: pid,
+      exited: statusReportsExited(pid)
+    });
+    expect(stat?.startTime).toMatch(DIGITS);
+  } finally {
+    child.kill('SIGKILL');
+    await once(child, 'exit');
+    fs.rmSync(folder, { recursive: true, force: true });
+  }
 });

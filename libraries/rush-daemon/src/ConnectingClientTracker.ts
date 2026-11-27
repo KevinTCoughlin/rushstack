@@ -15,11 +15,27 @@ export interface IConnectingClientTrackerOptions {
   readonly idleLimitMs?: number;
   /** The longest that one call to {@link ConnectingClientTracker.waitAsync} waits. */
   readonly waitLimitMs?: number;
+  /** Clock for activity timestamps. Defaults to {@link setConnectingClientNow}, then `performance.now`. */
+  readonly now?: () => number;
 }
 
 // A client sends its next handshake frame as soon as it reads the daemon's reply, so a connection that neither sent
 // a frame nor got one for this long is not about to send a request.
-const DEFAULT_IDLE_LIMIT_MS: number = 100;
+export const DEFAULT_CONNECTING_IDLE_LIMIT_MS: number = 100;
+
+// Replaced by tests so a wire test can move this clock without replacing the process clock. `performance.now`
+// is also what Node uses to schedule I/O, so a global fake clock stops the daemon from reading the socket.
+let defaultNow: (() => number) | undefined;
+
+/** Sets the clock for trackers constructed without {@link IConnectingClientTrackerOptions.now}. */
+export function setConnectingClientNow(now: (() => number) | undefined): void {
+  defaultNow = now;
+}
+
+function performanceNow(): number {
+  return performance.now();
+}
+
 // What a batch of shared builds may spend waiting before its reconcile, so that a stalled client costs little.
 const DEFAULT_WAIT_LIMIT_MS: number = 100;
 
@@ -36,12 +52,14 @@ const DEFAULT_WAIT_LIMIT_MS: number = 100;
 export class ConnectingClientTracker {
   readonly #idleLimitMs: number;
   readonly #waitLimitMs: number;
+  readonly #now: () => number;
   readonly #lastActivityTimeMs: Map<IConnectingClient, number> = new Map();
   readonly #waiters: Set<() => void> = new Set();
 
   public constructor(options: IConnectingClientTrackerOptions = {}) {
-    this.#idleLimitMs = options.idleLimitMs ?? DEFAULT_IDLE_LIMIT_MS;
+    this.#idleLimitMs = options.idleLimitMs ?? DEFAULT_CONNECTING_IDLE_LIMIT_MS;
     this.#waitLimitMs = options.waitLimitMs ?? DEFAULT_WAIT_LIMIT_MS;
+    this.#now = options.now ?? defaultNow ?? performanceNow;
   }
 
   /** Starts tracking a connection that the daemon has just accepted. */
@@ -49,7 +67,7 @@ export class ConnectingClientTracker {
     const client: IConnectingClient = {
       touch: () => {
         if (this.#lastActivityTimeMs.has(client)) {
-          this.#lastActivityTimeMs.set(client, performance.now());
+          this.#lastActivityTimeMs.set(client, this.#now());
         }
       },
       settle: () => {
@@ -58,7 +76,7 @@ export class ConnectingClientTracker {
         }
       }
     };
-    this.#lastActivityTimeMs.set(client, performance.now());
+    this.#lastActivityTimeMs.set(client, this.#now());
     return client;
   }
 
@@ -73,9 +91,9 @@ export class ConnectingClientTracker {
    */
   public async waitAsync(): Promise<void> {
     await waitForPollAsync();
-    const deadlineMs: number = performance.now() + this.#waitLimitMs;
+    const deadlineMs: number = this.#now() + this.#waitLimitMs;
     for (;;) {
-      const nowMs: number = performance.now();
+      const nowMs: number = this.#now();
       const idleTimeMs: number | undefined = this.#getIdleTimeMs();
       if (idleTimeMs === undefined || idleTimeMs <= nowMs || deadlineMs <= nowMs) {
         return;
