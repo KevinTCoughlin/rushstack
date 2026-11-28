@@ -11,6 +11,7 @@ import { DAEMON_OPERATION_GROUPS_ENV_VAR } from '../DaemonOperationGroupMarker';
 import { reapDeadDaemonOperationGroupsAsync } from '../DaemonOperationGroupReaper';
 import { getOperationGroupsFolder, writeOperationGroupRecord } from '../DaemonOperationGroups';
 import { POSIX_PROCESS_GROUP_OPS } from '../DaemonProcessGroup';
+import { hasEnvironmentEntry } from '../DaemonProcessStat';
 import type { IDaemonOrphanReaperOptions } from '../DaemonReapOptions';
 
 import { RECORDED_START } from './OperationGroupFixture';
@@ -20,8 +21,6 @@ import type { IStartedProcess } from './ProcessWaitFixture';
 import { createTestDaemonPaths } from './TestDaemonFixture';
 
 const linuxIt: jest.It = process.platform === 'linux' ? it : it.skip;
-// A detached shell leads a new session and group, starts a member in them, prints its pid and exits, which
-// leaves the group without its leader, as an operation whose shell has exited does.
 const LEADERLESS_SCRIPT: string = 'sleep 600 </dev/null >/dev/null 2>&1 & echo $!';
 const SHELL_OPTIONS: { detached: true; stdio: ['ignore', 'pipe', 'ignore'] } = {
   detached: true,
@@ -45,6 +44,11 @@ afterEach(() => {
   started = [];
 });
 
+// `/proc/<pid>/environ` stays empty until exec finishes, so wait until the marker is readable.
+function showsMarker(pid: number, marker: string | undefined): boolean {
+  return marker === undefined || hasEnvironmentEntry(pid, `${DAEMON_OPERATION_GROUPS_ENV_VAR}=${marker}`);
+}
+
 async function startLeaderlessGroupAsync(marker: string | undefined): Promise<ILeaderlessGroup> {
   const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, [DAEMON_OPERATION_GROUPS_ENV_VAR]: marker };
   const shell: ChildProcess = spawn('/bin/sh', ['-c', LEADERLESS_SCRIPT], { ...SHELL_OPTIONS, env });
@@ -54,7 +58,7 @@ async function startLeaderlessGroupAsync(marker: string | undefined): Promise<IL
   started = identifyStarted([member]);
   await exited;
   const groupId: number = Number(shell.pid);
-  expect(await waitUntilAsync(() => isGone(groupId))).toBe(true);
+  expect(await waitUntilAsync(() => isGone(groupId) && showsMarker(member, marker))).toBe(true);
   return { groupId, member };
 }
 
